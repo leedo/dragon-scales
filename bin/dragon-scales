@@ -18,21 +18,22 @@ GetOptions(
 );
 
 my $rrdcached = DB::rrdcached->new($dir);
+$rrdcached->spawn->recv;
 
 my $app = builder {
   mount "/dragon" => sub {
     my $env = shift;
     sub {
       my $respond = shift;
-      $rrdcached->handle->cb(sub {
-        eval { my $h = shift->recv };
+      $rrdcached->command("STATS")->cb(sub {
+        my $lines = eval { shift->recv };
 
         if ($@) {
           $respond->([500, ["Content-Type", "text/plain"], [$@]]);
           return;
         }
 
-        $respond->([200, ["Content-Type", "text/plain"], ["ok"]]);
+        $respond->([200, ["Content-Type", "text/plain"], [ join "\n", @$lines]]);
       });
     };
   };

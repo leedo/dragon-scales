@@ -12,8 +12,6 @@ sub new {
   $dir = $dir ? Cwd::abs_path($dir) : Cwd::getcwd . "/cached";
   bless {
     dir    => $dir,
-    handle => undef,
-    conn   => undef,
     pid    => undef,
   }, $class;
 }
@@ -48,41 +46,42 @@ sub spawn {
   return $cv;
 }
 
+sub command {
+  my ($self, $command) = @_;
+  my $cv = AE::cv;
+
+  my $handle = $self->handle;
+  $handle->cb(sub {
+    my $h = eval { shift->recv };
+    return $cv->croak($@) if $@;
+    $h->push_write("AnyEvent::Handle::rrdcached", $command);
+    $h->push_read("AnyEvent::Handle::rrdcached" => sub {
+      $cv->send($_[1]);
+    });
+  });
+
+  return $cv;
+}
+
 sub handle {
   my ($self, $cv, $attempts) = @_;
   $cv ||= AE::cv;
-
-  if ($self->{handle}) {
-    $cv->send($self->{handle});
-    return $cv;
-  }
 
   $self->{conn} = tcp_connect "unix/", "$self->{dir}/rrd.sock", sub {
     my ($fh) = @_;
 
     if (!$fh) {
-      $self->spawn->cb(sub {
-        eval { shift->recv };
+      $cv->croak("cound not connect to rrdcached at $self->{dir}/rrd.sock");
+      return;
+    }
 
-        if ($@) {
-          $cv->croak($@);
-        }
-        elsif ($attempts) {
-          $cv->croak("spawned but can not connect");
-        }
-        else {
-          $self->handle($cv, $attempts++);
-        }
-      });
-    }
-    else {
-      $self->{handle} = AnyEvent::Handle->new(
-        fh => $fh,
-        on_eof   => sub { delete $self->{handle} },
-        on_error => sub { delete $self->{handle} },
-      );
-      $cv->send($self->{handle});
-    }
+    $self->{handle} = AnyEvent::Handle->new(
+      fh => $fh,
+      on_eof   => sub { delete $self->{handle} },
+      on_error => sub { delete $self->{handle} },
+    );
+
+    $cv->send($self->{handle});
   };
 
   return $cv;
@@ -99,6 +98,36 @@ sub DESTROY {
     kill 2, $pid;
     waitpid $pid, 0;
   }
+}
+
+package AnyEvent::Handle::rrdcached;
+
+sub anyevent_read_type {
+  my ($handle, $cb) = @_;
+  my ($lines, $msg);
+
+  sub {
+    if (!$lines && $_[0]{rbuf} =~ s/^(\d+) (.*)\n//) {
+      ($lines, $msg) = ($1, $2);
+      if ($lines eq "0") {
+        $cb->($_[0], [$msg]);
+        return 1;
+      }
+    }
+
+    if ($lines) {
+      my @lines = split "\n", $_[0]{rbuf};
+      if (@lines == $lines) {
+        $cb->($_[0], \@lines);
+        return 1;
+      }
+    }
+  }
+};
+
+sub anyevent_write_type {
+  my ($handle, @args) = @_;
+  return join(" ", @args) . "\n";
 }
 
 1;
