@@ -64,8 +64,33 @@ sub command {
     return $cv->croak($@) if $@;
     $h->push_write("AnyEvent::Handle::rrdcached", $command);
     $h->push_read("AnyEvent::Handle::rrdcached" => sub {
-      $cv->send($_[1]);
+      $cv->send($command eq "BATCH" ? $_[0] : $_[1]);
     });
+  });
+
+  return $cv;
+}
+
+sub batch_command {
+  my ($self, $h, $command) = @_;
+  $h->push_write("AnyEvent::Handle::rrdcached", $command);
+}
+
+sub batch_complete {
+  my ($self, $h, $cb) = @_;
+  my $cv = AE::cv;
+
+  if ($cb) {
+    $cv->cb(sub {
+      my $ret = eval { shift->recv };
+      return $cb->(undef, $@) if $@;
+      $cb->($ret);
+    });
+  }
+
+  $h->push_write("AnyEvent::Handle::rrdcached", ".");
+  $h->push_read("AnyEvent::Handle::rrdcached", sub {
+    $cv->send($_[1]);
   });
 
   return $cv;
