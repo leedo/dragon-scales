@@ -25,11 +25,11 @@ my $app = builder {
     my $env = shift;
     sub {
       my $respond = shift;
-      $rrdcached->command("STATS")->cb(sub {
-        my $lines = eval { shift->recv };
+      $rrdcached->command("STATS", sub {
+        my ($lines, $err) = @_;
 
-        if ($@) {
-          $respond->([500, ["Content-Type", "text/plain"], [$@]]);
+        if ($err) {
+          $respond->([500, ["Content-Type", "text/plain"], [$err]]);
           return;
         }
 

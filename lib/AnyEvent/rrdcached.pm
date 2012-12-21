@@ -1,4 +1,4 @@
-package DB::rrdcached;
+package AnyEvent::rrdcached;
 
 use v5.14;
 
@@ -47,8 +47,16 @@ sub spawn {
 }
 
 sub command {
-  my ($self, $command) = @_;
+  my ($self, $command, $cb) = @_;
   my $cv = AE::cv;
+
+  if ($cb) {
+    $cv->cb(sub {
+      my $ret = eval { shift->recv };
+      return $cb->(undef, $@) if $@;
+      $cb->($ret);
+    });
+  }
 
   my $handle = $self->handle;
   $handle->cb(sub {
@@ -87,8 +95,10 @@ sub handle {
   return $cv;
 }
 
-sub DESTROY {
+sub kill {
   my $self = shift;
+  return unless $self->{pid};
+
   my $pid = do {
     open my $fh, "<", "$self->{dir}/rrd.pid";
     local $/;
@@ -98,6 +108,11 @@ sub DESTROY {
     kill 2, $pid;
     waitpid $pid, 0;
   }
+}
+
+sub DESTROY {
+  my $self = shift;
+  $self->kill;
 }
 
 package AnyEvent::Handle::rrdcached;
