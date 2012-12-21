@@ -21,46 +21,38 @@ my $rrdcached = AnyEvent::rrdcached->new($dir);
 $rrdcached->spawn->recv;
 
 my @batches;
-
 my $app = builder {
   mount "/dragon" => sub {
     my $env = shift;
     sub {
       my $respond = shift;
 
-      if (!@batches) {
-        $rrdcached->command("BATCH", sub {
-          my ($batch, $err) = @_;
-
-          if ($err) {
-            $respond->([500, ["Content-Type", "text/plain"], [$err]]);
-            return;
-          }
-
-          $rrdcached->batch_command($batch, "FARTS");
-          $respond->([200, ["Content-Type", "text/plain"], ["ok"]]);
-          push @batches, [$batch, 0];
-        });
-
-        return;
-      }
-
-      $rrdcached->batch_command($batches[0][0], "FARTS");
-
-      if ($batches[0][1]++ > 5) {
+      # take batch out of rotation
+      if (@batches and $batches[0][1] > 5) {
         my $batch = shift @batches;
         $rrdcached->batch_complete($batch->[0], sub {
           my ($res, $err) = @_;
-          if ($err) {
-            $respond->([500, ["Content-Type", "text/plain"], [$err]]);
-            return;
-          }
-          $respond->([200, ["Content-Type", "text/plain"], [ join "\n", @$res]]);
+          warn $err if $err;
         });
       }
-      else {
+
+      my $done = sub {
+        my $batch = shift;
+        $batch->[1]++;
+        $rrdcached->batch_command($batch->[0], "FARTS");
         $respond->([200, ["Content-Type", "text/plain"], ["ok"]]);
+      };
+
+      if (!@batches) {
+        return $rrdcached->command("BATCH", sub {
+          my ($batch, $err) = @_;
+          warn $err if $err;
+          push @batches, [$batch, 0];
+          $done->($batches[-1]);
+        });
       }
+
+      $done->($batches[0]);
     };
   };
 };
