@@ -44,7 +44,7 @@ my $app = builder {
       };
 
       if (!@batches) {
-        return $rrdcached->command("BATCH", sub {
+        return $rrdcached->batch(sub {
           my ($batch, $err) = @_;
           warn $err if $err;
           push @batches, [$batch, 0];

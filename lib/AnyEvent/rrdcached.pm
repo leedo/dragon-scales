@@ -6,6 +6,17 @@ use Cwd ();
 use AnyEvent::Socket;
 use AnyEvent::Handle;
 
+our @COMMANDS = qw/
+  flush flushall pending forget queue
+  help stats update wrote batch quit/;
+
+for my $cmd (@COMMANDS) {
+  no strict "refs";
+  *{"AnyEvent::rrdcached::$cmd"} = sub {
+    shift->command(uc $cmd, @_)
+  };
+}
+
 sub new {
   my ($class, $dir) = @_;
 
@@ -58,8 +69,8 @@ sub command {
     });
   }
 
-  my $handle = $self->handle;
-  $handle->cb(sub {
+  my $connect = $self->connect;
+  $connect->cb(sub {
     my $h = eval { shift->recv };
     return $cv->croak($@) if $@;
     $h->push_write("AnyEvent::Handle::rrdcached", $command);
@@ -96,7 +107,7 @@ sub batch_complete {
   return $cv;
 }
 
-sub handle {
+sub connect {
   my ($self, $cv, $attempts) = @_;
   $cv ||= AE::cv;
 
