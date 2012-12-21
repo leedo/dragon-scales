@@ -6,6 +6,7 @@ use Getopt::Long;
 use AnyEvent::rrdcached;
 use Twiggy::Server;
 use Plack::Builder;
+use Plack::Request;
 
 my $dir;
 my %twiggy = (host => "0.0.0.0", port => 5000);
@@ -20,39 +21,24 @@ GetOptions(
 my $rrdcached = AnyEvent::rrdcached->new($dir);
 $rrdcached->spawn->recv;
 
-my @batches;
 my $app = builder {
   mount "/dragon" => sub {
-    my $env = shift;
+    my $req = Plack::Request->new(shift);
+
     sub {
       my $respond = shift;
+      my $id = $req->parameters->{id};
+      my @stats = $req->parameters->get_all("stats");
+      my $time = time;
 
-      # take batch out of rotation
-      if (@batches and $batches[0][1] > 5) {
-        my $batch = shift @batches;
-        $rrdcached->batch_complete($batch->[0], sub {
+      for (@stats) {
+        $rrdcached->update("$id-$_.rrd", $time, 1, sub {
           my ($res, $err) = @_;
           warn $err if $err;
         });
       }
 
-      my $done = sub {
-        my $batch = shift;
-        $batch->[1]++;
-        $rrdcached->batch_command($batch->[0], "FARTS");
-        $respond->([200, ["Content-Type", "text/plain"], ["ok"]]);
-      };
-
-      if (!@batches) {
-        return $rrdcached->batch(sub {
-          my ($batch, $err) = @_;
-          warn $err if $err;
-          push @batches, [$batch, 0];
-          $done->($batches[-1]);
-        });
-      }
-
-      $done->($batches[0]);
+      $respond->([200, ["Content-Type", "text/plain"], ["ok"]]);
     };
   };
 };

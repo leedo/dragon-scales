@@ -43,6 +43,7 @@ sub spawn {
   my $cmd = AnyEvent::Util::run_cmd $self->args,
     '$$' => \($self->{pid}),
     '2>' => sub {
+      print $_[0];
       if ($_[0] =~ /listening/) {
         $cv->send;
         undef $cv;
@@ -58,8 +59,13 @@ sub spawn {
 }
 
 sub command {
-  my ($self, $command, $cb) = @_;
+  my ($self, $command, @args) = @_;
   my $cv = AE::cv;
+  my $cb;
+
+  if (@args) {
+    $cb = pop @args if ref $args[-1] eq 'CODE';
+  }
 
   if ($cb) {
     $cv->cb(sub {
@@ -73,7 +79,8 @@ sub command {
   $connect->cb(sub {
     my $h = eval { shift->recv };
     return $cv->croak($@) if $@;
-    $h->push_write("AnyEvent::Handle::rrdcached", $command);
+    $h->on_error(sub { $cv->croak($_[2]) });
+    $h->push_write("AnyEvent::Handle::rrdcached", $command, @args);
     $h->push_read("AnyEvent::Handle::rrdcached" => sub {
       $cv->send($command eq "BATCH" ? $_[0] : $_[1]);
     });
@@ -83,8 +90,8 @@ sub command {
 }
 
 sub batch_command {
-  my ($self, $h, $command) = @_;
-  $h->push_write("AnyEvent::Handle::rrdcached", $command);
+  my ($self, $h, $command, @args) = @_;
+  $h->push_write("AnyEvent::Handle::rrdcached", $command, @args);
 }
 
 sub batch_complete {
@@ -119,13 +126,11 @@ sub connect {
       return;
     }
 
-    $self->{handle} = AnyEvent::Handle->new(
+    my $h; $h = AnyEvent::Handle->new(
       fh => $fh,
-      on_eof   => sub { delete $self->{handle} },
-      on_error => sub { delete $self->{handle} },
+      on_eof => sub { undef $h }
     );
-
-    $cv->send($self->{handle});
+    $cv->send($h);
   };
 
   return $cv;
@@ -158,11 +163,15 @@ sub anyevent_read_type {
   my ($lines, $msg);
 
   sub {
-    if (!$lines && $_[0]{rbuf} =~ s/^(\d+) (.*)\n//) {
+    if (!$lines && $_[0]{rbuf} =~ s/^([0-9]+|-1) (.*)\n//) {
       ($lines, $msg) = ($1, $2);
       if ($lines eq "0") {
         $cb->($_[0], [$msg]);
         return 1;
+      }
+      if ($lines eq "-1") {
+        $_[0]->_error(Errno::EBADMSG, 1, $msg);
+        return;
       }
     }
 
@@ -178,6 +187,7 @@ sub anyevent_read_type {
 
 sub anyevent_write_type {
   my ($handle, @args) = @_;
+  warn join " ", @args;
   return join(" ", @args) . "\n";
 }
 
