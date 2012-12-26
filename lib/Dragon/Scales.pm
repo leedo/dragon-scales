@@ -116,7 +116,7 @@ sub fetch {
       $req->respond([map {
         my ($time, $val) = split ": ", $_;
         [int($time), $val eq "nan" ? 0 : eval($val)];
-      } @lines[2..$#lines]]);
+      } @lines[2 .. $#lines - 1]]);
     });
   });
 }
