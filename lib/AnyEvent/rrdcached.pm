@@ -20,7 +20,7 @@ sub dsn {
 
 sub args {
   my $self = shift;
-  return [ qw/rrdcached -g -w 300 -z 300 -f 600 -m 0644/,
+  return [ qw/rrdcached -g -w 300 -z 300 -f 600 -m 0644 -B/,
            "-b", $self->{dir},
            "-l", "unix:$self->{dir}/rrd.sock",
            "-p", "$self->{dir}/rrd.pid",
