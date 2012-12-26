@@ -2,7 +2,8 @@ package AnyEvent::rrdcache;
 
 use v5.14;
 
-use Cwd ();
+use Data::Dump qw/pp/;
+use Scalar::Util qw/weaken/;
 use AnyEvent::Socket;
 use AnyEvent::Handle;
 
@@ -22,64 +23,91 @@ BEGIN {
 sub new {
   my ($class, $connect) = @_;
   die "need connect array ref" unless defined $connect and @$connect == 2;
-  bless {connect => $connect}, $class;
+  bless {
+    connect => $connect,
+    connect_queue => [],
+  }, $class;
 }
 
 sub command {
-  my ($self, $command, @args) = @_;
-  my $cv = AE::cv;
-  my $cb;
+  my $self = shift;
+  my $cmd = shift;
+  $self->{cmd_cb} or return $self->connect($cmd, @_);
+  $self->{cmd_cb}->($cmd, @_);
+}
 
-  if (@args) {
-    $cb = pop @args if ref $args[-1] eq 'CODE';
-  }
-
-  if ($cb) {
-    $cv->cb(sub {
-      my $ret = eval { shift->recv };
-      return $cb->(undef, $@) if $@;
-      $cb->($ret);
-    });
-  }
-
-  my $connect = $self->connect;
-  $connect->cb(sub {
-    my $h = eval { shift->recv };
-    return $cv->croak($@) if $@;
-    $h->on_error(sub { $cv->croak($_[2]) });
-    $h->push_write("AnyEvent::Handle::rrdcache", $command, @args);
-    $h->push_read("AnyEvent::Handle::rrdcache" => sub {
-      if ($command eq "BATCH") {
-        $cv->send(AnyEvent::rrdcache::Batch->new($_[0]));
-      }
-      else {
-        $cv->send($_[1]);
-      }
-    });
-  });
-
-  return $cv;
+sub cleanup {
+  my ($self, $msg) = @_;
+  delete $self->{conn};
+  delete $self->{cmd_cb};
 }
 
 sub connect {
-  my ($self, $cv, $attempts) = @_;
-  $cv ||= AE::cv;
+  my ($self) = shift;
+
+  my $cv;
+  if (@_) {
+    $cv = pop if UNIVERSAL::isa($_[-1], 'AnyEvent::CondVar');
+    $cv ||= AE::cv;
+    push @{$self->{connect_queue}}, [ $cv, @_ ];
+  }
+
+  return $cv if $self->{conn};
 
   my ($host, $port) = @{$self->{connect}};
+  weaken $self;
 
   $self->{conn} = tcp_connect $host, $port, sub {
     my ($fh) = @_;
 
     if (!$fh) {
-      $cv->croak("cound not connect to rrdcached at " . join " ", @{$self->{connect}});
+      my $err = "could not connect to rrdcached";
+      $self->cleanup($err);
+      $cv->croak($err);
       return;
     }
 
-    my $h; $h = AnyEvent::Handle->new(
+    my $h = AnyEvent::Handle->new(
       fh => $fh,
-      on_eof => sub { undef $h }
+      on_eof => sub {
+        $_[0]->destroy;
+        $self->cleanup($_[2]) if $_[1];
+      },
+      on_read => sub {
+        $_[0]->destroy;
+        $self->cleanup("connection closed");
+      },
     );
-    $cv->send($h);
+
+    $self->{cmd_cb} = sub {
+      my $cmd = shift;
+      my ($cv, $cb);
+      if (@_) {
+        $cv = pop if ref $_[-1] && UNIVERSAL::isa($_[-1], 'AnyEvent::CondVar');
+        $cb = pop if ref $_[-1] eq 'CODE';
+      }
+      $cv ||= AE::cv;
+      $cv->cb(sub {
+        my $cv = shift;
+        my $res = $cv->recv;
+        $cb->($res) if $cb;
+      });
+      $h->push_write("AnyEvent::Handle::rrdcache", $cmd, @_);
+      if ($cmd eq "QUIT") {
+        $h->on_eof(sub { $cv->send("connection closed") });
+      }
+      else {
+        $h->push_read("AnyEvent::Handle::rrdcache", sub {
+          $cv->send($_[1]);
+        });
+      }
+    };
+
+    my $queue = delete $self->{connect_queue} || [];
+    for my $command (@$queue) {
+      my ($cv, @args) = @$command;
+      $self->{cmd_cb}->(@args, $cv);
+    }
   };
 
   return $cv;
@@ -89,27 +117,32 @@ package AnyEvent::Handle::rrdcache;
 
 sub anyevent_read_type {
   my ($handle, $cb) = @_;
-  my ($lines, $msg);
+  my ($lines, @lines, $msg);
 
   sub {
-    print $_[0]{rbuf};
     if (!$lines && $_[0]{rbuf} =~ s/^([0-9]+|-1) (.*)\n//) {
       ($lines, $msg) = ($1, $2);
       if ($lines eq "0") {
+        $lines = undef;
         $cb->($_[0], [$msg]);
         return 1;
       }
       if ($lines eq "-1") {
+        $lines = undef;
         $_[0]->_error(Errno::EBADMSG, 1, $msg);
-        return;
+        return 1;
       }
     }
 
     if ($lines) {
-      my @lines = split "\n", $_[0]{rbuf};
-      if (@lines == $lines) {
-        $cb->($_[0], \@lines);
-        return 1;
+      while ($_[0]{rbuf} =~ s/(.*)\n//) {
+        push @lines, $1;
+        if (@lines == $lines) {
+          $cb->($_[0], \@lines);
+          $lines = undef;
+          @lines = ();
+          return 1;
+        }
       }
     }
   }
@@ -118,47 +151,6 @@ sub anyevent_read_type {
 sub anyevent_write_type {
   my ($handle, @args) = @_;
   return join(" ", @args) . "\n";
-}
-
-package AnyEvent::rrdcache::Batch;
-
-use parent "AnyEvent::rrdcache";
-
-sub new {
-  my ($class, $handle) = @_;
-  die "handle required" unless defined $handle;
-  bless {
-    h => $handle,
-    commands => [],
-  }, $class;
-}
-
-sub command {
-  my $self = shift;
-  push @{$self->{commands}}, join " ", @_;
-  $self->{h}->push_write("AnyEvent::Handle::rrdcache", @_);
-}
-
-sub complete {
-  my ($self, $cb) = @_;
-  my $cv = AE::cv;
-
-  if ($cb) {
-    $cv->cb(sub {
-      my $ret = eval { shift->recv };
-      return $cb->(undef, $@) if $@;
-      $cb->($ret);
-    });
-  }
-
-  $self->{h}->push_write("AnyEvent::Handle::rrdcache", ".");
-  $self->{h}->push_read("AnyEvent::Handle::rrdcache", sub {
-    $cv->send($_[1]);
-    $_[0]->destroy;
-    undef $_[0];
-  });
-
-  return $cv;
 }
 
 1;

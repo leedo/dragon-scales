@@ -5,8 +5,6 @@ use AnyEvent::Util ();
 
 sub new {
   my ($class, $dir) = @_;
-
-  $dir = Cwd::abs_path($dir);
   mkdir "$dir/$_" for qw/journal/;
 
   bless {
@@ -23,7 +21,7 @@ sub dsn {
 sub args {
   my $self = shift;
   return [ qw/rrdcached -g -w 300 -z 300 -f 600 -m 0644/,
-           "-b", "$self->{dir}",
+           "-b", $self->{dir},
            "-l", "unix:$self->{dir}/rrd.sock",
            "-p", "$self->{dir}/rrd.pid",
            "-j", "$self->{dir}/journal" ];
