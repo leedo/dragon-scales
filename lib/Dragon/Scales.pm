@@ -10,10 +10,28 @@ sub new {
   my ($class, $client, $dir) = @_;
   die "need rrdcache client" unless defined $client;
   die "need rrd dir" unless defined $dir;
-  bless {
+
+  my $self = bless {
     client => $client,
     dir => $dir,
+    buffer => {},
   }, $class;
+
+  $self->{t} = AE::timer 10, 10, sub { $self->flush };
+
+  return $self;
+}
+
+sub flush {
+  my $self = shift;
+  my $cv = AE::cv;
+  my $time = AE::time;
+  my $format = "rrds/%s.rrd $time:%s";
+
+  for my $stat (keys %{$self->{buffer}}) {
+    my $value = delete $self->{buffer}{$stat};
+    $self->{client}->update(sprintf($format, $stat, $value), sub {});
+  }
 }
 
 sub handle_req {
@@ -34,32 +52,13 @@ sub handle_req {
 
 sub update {
   my ($self, $id, $req) = @_;
-
   my @stats = $req->parameters->get_all("stats");
-  my $time = AE::time;
-  my $format = "$self->{dir}/$id-%s.rrd $time:1";
 
-  if (@stats == 1) {
-    $self->{client}->update(sprintf($format, $stats[0]), sub {
-      my ($res, $err) = @_;
-      return $req->error($err) if $err;
-      $req->respond($res);
-    });
-    return;
+  for my $stat (@stats) {
+    $self->{buffer}{"$id-$stat"}++;
   }
 
-  $self->{client}->batch(sub {
-    my ($batch, $err) = @_;
-    return $req->error($err) if $err;
-
-    $batch->update(sprintf $format, $_) for @stats;
-
-    $batch->complete(sub {
-      my ($res, $err) = @_;
-      return $req->error($err) if $err;
-      $req->respond($res);
-    });
-  });
+  $req->respond("ok");
 }
 
 sub create {
