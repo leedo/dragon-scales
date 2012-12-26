@@ -26,11 +26,19 @@ sub flush {
   my $self = shift;
   my $cv = AE::cv;
   my $time = AE::time;
-  my $format = "rrds/%s.rrd $time:%s";
+  my $c = $self->{client};
 
   for my $stat (keys %{$self->{buffer}}) {
     my $value = delete $self->{buffer}{$stat};
-    $self->{client}->update(sprintf($format, $stat, $value), sub {});
+    my $file = "$self->{dir}/rrds/$stat.rrd";
+
+    if (!-e $file) {
+      my $cv = $self->create_rrd(split "-", $stat);
+      $cv->cb(sub {$c->update($file, "$time:$value")});
+      next;
+    }
+
+    $c->update($file, "$time:$value", sub {});
   }
 }
 
@@ -42,32 +50,28 @@ sub handle_req {
 
   do {
     given ($action) {
-      when ("pv")     { $self->update($id, $req) }
-      when ("stats")  { $self->fetch($id, $req)  }
-      when ("create") { $self->create($id, $req) }
+      when ("incr") { $self->incr($id, $req) }
+      when ("stat") { $self->fetch($id, $req) }
       default { $req->respond("invalid action") }
     }
   };
 }
 
-sub update {
+sub incr {
   my ($self, $id, $req) = @_;
   my @stats = $req->parameters->get_all("stats");
-
-  for my $stat (@stats) {
-    $self->{buffer}{"$id-$stat"}++;
-  }
-
+  $self->{buffer}{"$id-$_"}++ for @stats;
   $req->respond("ok");
 }
 
-sub create {
-  my ($self, $id, $req) = @_;
-  my $stat = $req->parameters->{stat};
+sub create_rrd {
+  my ($self, $id, $stat) = @_;
+
+  my $cv = AE::cv;
   my $file = "$id-$stat.rrd";
 
   if (-e "$self->{dir}/$file") {
-    $req->respond("file already exists");
+    $cv->croak("file already exists");
     return;
   }
 
@@ -81,14 +85,16 @@ sub create {
   );
 
   my ($out, $err);
-  my $cv = AnyEvent::Util::run_cmd \@cmd,
+  my $cmd = AnyEvent::Util::run_cmd \@cmd,
     "1>" => \$out,
     "2>" => \$err;
 
-  $cv->cb(sub {
-    shift->recv && return $req->error("error creating RRD: $err");
-    $req->respond("created $file");
+  $cmd->cb(sub {
+    shift->recv && return $cv->croak("error creating RRD: $err");
+    $cv->send;
   });
+
+  return $cv;
 }
 
 sub fetch {
