@@ -21,10 +21,12 @@ BEGIN {
 }
 
 sub new {
-  my ($class, $connect) = @_;
-  die "need connect array ref" unless defined $connect and @$connect == 2;
+  my ($class, %args) = @_;
+  die "need host" unless defined $args{host};
+  die "need port" unless defined $args{port};
   bless {
-    connect => $connect,
+    host => $args{host},
+    port => $args{port},
     connect_queue => [],
   }, $class;
 }
@@ -54,10 +56,9 @@ sub connect {
 
   return $cv if $self->{conn};
 
-  my ($host, $port) = @{$self->{connect}};
   weaken $self;
 
-  $self->{conn} = tcp_connect $host, $port, sub {
+  $self->{conn} = tcp_connect $self->{host}, $self->{port}, sub {
     my ($fh) = @_;
 
     if (!$fh) {

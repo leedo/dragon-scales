@@ -13,9 +13,9 @@ sub new {
   }, $class;
 }
 
-sub dsn {
+sub sock {
   my $self = shift;
-  return ["unix/", "$self->{dir}/rrd.sock"];
+  return "$self->{dir}/rrd.sock";
 }
 
 sub args {
