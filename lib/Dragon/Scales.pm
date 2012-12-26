@@ -13,11 +13,11 @@ sub new {
 
   my $self = bless {
     client => $client,
-    dir => $dir,
+    dir    => $dir,
     buffer => {},
   }, $class;
 
-  $self->{t} = AE::timer 10, 10, sub { $self->flush };
+  $self->{t} = AE::timer 60, 60, sub { $self->flush };
 
   return $self;
 }
