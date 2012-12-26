@@ -13,9 +13,15 @@ sub test_rrdcache {
   my $cb = shift;
   my $dir = Cwd::abs_path "t/cached";
   mkdir "$dir/$_" for "", "rrds", "journal";
+
   my $server = AnyEvent::rrdcached->new($dir);
   $server->spawn->recv;
-  my $client = AnyEvent::rrdcache->new($server->dsn);
+
+  my $client = AnyEvent::rrdcache->new(
+    host => "unix/",
+    port => $server->sock
+  );
+
   push @servers, $server;
   $cb->($client);
 }
