@@ -16,12 +16,11 @@ mkdir "$dir/rrds";
 our $server = AnyEvent::rrdcached->new($dir);
 $server->spawn->recv;
 
-my $client = AnyEvent::rrdcache->new(
+my $dragon = Dragon::Scales->new(
   host => "unix/",
   port => $server->sock,
+  dir  => "$dir/rrds"
 );
-
-my $dragon = Dragon::Scales->new($client, "$dir/rrds");
 
 builder {
   mount "/" => $dragon->to_app;

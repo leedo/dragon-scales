@@ -4,17 +4,26 @@ use v5.14;
 
 use AnyEvent;
 use AnyEvent::Util;
+use AnyEvent::rrdcache;
+use Dragon::Scales::Worker;
 use Dragon::Scales::Request;
+use Data::Dump qw/pp/;
 
 sub new {
-  my ($class, $client, $dir) = @_;
-  die "need rrdcache client" unless defined $client;
-  die "need rrd dir" unless defined $dir;
+  my ($class, %args) = @_;
+  die "need rrdcached port" unless defined $args{port};
+  die "need rrdcached host" unless defined $args{host};
+  die "need rrd dir" unless defined $args{dir};
+
+  my $client = AnyEvent::rrdcache->new(
+    host => $args{host},
+    port => $args{port},
+  );
 
   my $self = bless {
     client => $client,
-    dir    => $dir,
     buffer => {},
+    %args
   }, $class;
 
   $self->{t} = AE::timer 60, 60, sub { $self->flush };
@@ -32,8 +41,9 @@ sub flush {
     my $file = "$self->{dir}/$stat.rrd";
 
     if (!-e $file) {
-      my $cv = $self->create_rrd(split "-", $stat);
-      $cv->cb(sub {$c->update($file, "$time:$value")});
+      $self->create(split("-", $stat), sub {
+        $c->update($file, "$time:$value")
+      });
       next;
     }
 
@@ -63,67 +73,37 @@ sub incr {
   $req->respond("ok");
 }
 
-sub create_rrd {
-  my ($self, $id, $stat) = @_;
+sub create {
+  my ($self, $id, $stat, $cb) = @_;
+  my $file = "$self->{dir}/$id-$stat.rrd";
 
-  my $cv = AE::cv;
-  my $file = "$id-$stat.rrd";
+  die "file already exists" if -e $file;
 
-  if (-e "$self->{dir}/$file") {
-    $cv->croak("file already exists");
-    return $cv;
-  }
-
-  my @cmd = (
-    qw/rrdtool create/, "$self->{dir}/$file",
-    "--start", time, "--step", 60,
+  rrd_create $file, {
+      start => time,
+      step  => 60,
+    },
     "DS:$stat:GAUGE:120:U:U",
     "RRA:AVERAGE:0.5:5:576", # five minute interval for two days
     "RRA:AVERAGE:0.5:30:1400", # thirty minute interval for a month
     "RRA:AVERAGE:0.5:720:704", # 12 hour interval for a year
-  );
-
-  my ($out, $err);
-  my $cmd = AnyEvent::Util::run_cmd \@cmd,
-    "1>" => \$out,
-    "2>" => \$err;
-
-  $cmd->cb(sub {
-    shift->recv && return $cv->croak("error creating RRD: $err");
-    $cv->send;
-  });
-
-  return $cv;
+    $cb;
 }
 
 sub fetch {
   my ($self, $id, $req) = @_;
   my $stat = $req->parameters->{stat};
   my $file = "$self->{dir}/$id-$stat.rrd";
-  $self->{client}->flush($file, sub {
-    my ($ret, $err) = @_;
-    return $req->error($err) if $err;
 
-    my $time = time;
-    my @cmd = (
-      "rrdtool", "fetch",
-      "--start", time - 3600, "--end", time,
-      "$self->{dir}/$id-$stat.rrd", "AVERAGE"
-    );
-
-    my ($out, $err);
-    my $cv = AnyEvent::Util::run_cmd \@cmd,
-      "1>" => \$out,
-      "2>" => \$err;
-    $cv->cb(sub {
-      shift->recv and return $req->error("rrdfetch died: $out");
-      my @lines = split "\n", $out;
-      $req->respond([map {
-        my ($time, $val) = split ": ", $_;
-        [int($time), $val eq "nan" ? 0 : eval($val)];
-      } @lines[2 .. $#lines - 1]]);
-    });
-  });
+  rrd_fetch $file, {
+    start => time - 3600,
+    end   => time,
+    daemon => "unix:$self->{port}",
+  },
+  sub {
+    my ($samples, $err) = @_;
+    $req->respond([map { [$_->[0], $_->[1] || 0] } @$samples]);
+  };
 }
 
 sub to_app {
