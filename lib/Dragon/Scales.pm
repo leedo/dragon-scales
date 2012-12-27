@@ -24,13 +24,12 @@ sub new {
 
 sub flush {
   my $self = shift;
-  my $cv = AE::cv;
   my $time = AE::time;
   my $c = $self->{client};
 
   for my $stat (keys %{$self->{buffer}}) {
     my $value = delete $self->{buffer}{$stat};
-    my $file = "$self->{dir}/rrds/$stat.rrd";
+    my $file = "$self->{dir}/$stat.rrd";
 
     if (!-e $file) {
       my $cv = $self->create_rrd(split "-", $stat);
@@ -72,7 +71,7 @@ sub create_rrd {
 
   if (-e "$self->{dir}/$file") {
     $cv->croak("file already exists");
-    return;
+    return $cv;
   }
 
   my @cmd = (
