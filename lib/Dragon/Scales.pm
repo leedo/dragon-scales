@@ -10,9 +10,9 @@ use Dragon::Scales::Request;
 
 sub new {
   my ($class, %args) = @_;
-  die "need rrdcached port" unless defined $args{port};
-  die "need rrdcached host" unless defined $args{host};
-  die "need rrd dir" unless defined $args{dir};
+  for (qw{port host dir}) {
+    die "$_ is required" unless defined $args{$_};
+  }
 
   my $client = AnyEvent::rrdcache->new(
     host => $args{host},

@@ -13,14 +13,25 @@ sub new {
   }, $class;
 }
 
-sub sock {
+sub port {
   my $self = shift;
   return "$self->{dir}/rrd.sock";
 }
 
+sub host {
+  my $self = shift;
+  return "unix/";
+}
+
+sub rrd_dir {
+  my $self = shift;
+  return "$self->{dir}/rrds";
+}
+
 sub args {
   my $self = shift;
-  return [ qw/rrdcached -g -w 300 -z 300 -f 600 -m 0644 -B/,
+  # flush each file randomly over an hour
+  return [ qw/rrdcached -g -w 3600 -z 3600 -f 7200 -m 0644 -B/,
            "-b", $self->{dir},
            "-l", "unix:$self->{dir}/rrd.sock",
            "-p", "$self->{dir}/rrd.pid",

@@ -17,9 +17,9 @@ our $server = AnyEvent::rrdcached->new($dir);
 $server->spawn->recv;
 
 my $dragon = Dragon::Scales->new(
-  host => "unix/",
-  port => $server->sock,
-  dir  => "$dir/rrds"
+  host => $server->host,
+  port => $server->port,
+  dir  => $server->rrd_dir,
 );
 
 builder {

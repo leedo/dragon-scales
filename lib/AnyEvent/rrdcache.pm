@@ -22,13 +22,9 @@ BEGIN {
 
 sub new {
   my ($class, %args) = @_;
-  die "need host" unless defined $args{host};
-  die "need port" unless defined $args{port};
-  bless {
-    host => $args{host},
-    port => $args{port},
-    connect_queue => [],
-  }, $class;
+  die "host is required" unless defined $args{host};
+  die "port is required" unless defined $args{port};
+  bless {%args, connect_queue => []}, $class;
 }
 
 sub command {
