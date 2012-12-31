@@ -9,7 +9,7 @@ use Plack::Builder;
 use Cwd;
 
 my $dir = Cwd::abs_path($ENV{DRAGONSCALES_PATH} || "./cached");
-mkdir "$dir/rrds";
+mkdir "$dir/$_" for qw{rrds journal};
 
 # need server to stick around, because it shuts
 # down when it goes out of scope. better solution?

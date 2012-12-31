@@ -25,7 +25,7 @@ sub new {
     %args
   }, $class;
 
-  $self->{t} = AE::timer 60, 60, sub { $self->flush };
+  $self->{t} = AE::timer 0, 60, sub { $self->flush };
 
   return $self;
 }
@@ -34,6 +34,8 @@ sub flush {
   my $self = shift;
   my $time = AE::time;
   my $c = $self->{client};
+
+  print "flushing to rrdcached\n";
 
   for my $id (keys %{$self->{buffer}}) {
     for my $stat (keys %{$self->{buffer}{$id}}) {

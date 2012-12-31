@@ -45,8 +45,8 @@ sub spawn {
   my $cmd = AnyEvent::Util::run_cmd $self->args,
     '$$' => \($self->{pid}),
     '2>' => sub {
-      print $_[0];
       if ($_[0] =~ /listening/) {
+        print "rrdcached: $_[0]";
         $cv->send;
         undef $cv;
       }
@@ -54,7 +54,7 @@ sub spawn {
 
   $cmd->cb(sub {
     my $ret = shift->recv;
-    $cv->croak("rrdcached died with exit code $ret") if $cv;
+    $cv->croak("rrdcached quit with exit code $ret") if $cv;
   });
 
   return $cv;
