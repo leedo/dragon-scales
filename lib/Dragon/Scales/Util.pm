@@ -1,4 +1,4 @@
-package Dragon::Scales::Worker;
+package Dragon::Scales::Util;
 
 use strict;
 use warnings;

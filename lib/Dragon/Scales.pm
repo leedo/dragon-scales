@@ -5,7 +5,7 @@ use v5.14;
 use AnyEvent;
 use AnyEvent::Util;
 use AnyEvent::rrdcache;
-use Dragon::Scales::Worker;
+use Dragon::Scales::Util;
 use Dragon::Scales::Request;
 
 sub new {
@@ -40,7 +40,7 @@ sub flush {
   for my $id (keys %{$self->{buffer}}) {
     for my $stat (keys %{$self->{buffer}{$id}}) {
       my $file = "$self->{dir}/$id/$stat.rrd";
-      my $value = $self->{$id}{$stat};
+      my $value = $self->{buffer}{$id}{$stat};
 
       if (!-e $file) {
         $self->create($id, $stat, sub {
@@ -101,16 +101,34 @@ sub fetch {
   my $stat = $req->parameters->{stat};
   my $file = "$self->{dir}/$id/$stat.rrd";
   my $time = time;
+  my $host = $self->{host} eq "unix/" ? "unix" : $self->{host};
 
   rrd_fetch $file, {
       start => $time - 3600,
       end   => $time,
-      daemon => "unix:$self->{port}",
+      daemon => "$host:$self->{port}",
     },
     sub {
       my $samples = shift;
       return $req->error("unable to fetch") unless $samples;
-      $req->respond([map { [$_->[0], $_->[1] || 0] } @$samples]);
+
+      my $sum = 0;
+
+      # convert undef to 0
+      $_->[1] ||= 0 for @$samples;
+
+      # convert rate to total, add to sum
+      for my $i (0 .. @$samples - 1) {
+        $i = @$samples - $i - 1;
+        my $sec = $samples->[$i][0] - $samples->[$i - 1][0];
+        my $min = $sec / 60;
+        $sum += $samples->[$i][1] * $min;
+      }
+
+      $req->respond({
+        samples => $samples,
+        total   => int($sum),
+      });
     };
 }
 
