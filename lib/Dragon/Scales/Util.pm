@@ -8,13 +8,19 @@ use AnyEvent::Worker;
 use parent 'Exporter';
 
 our @EXPORT = qw(rrd_fetch rrd_create);
+our $WORKER;
 
-our $WORKER = AnyEvent::Worker->new(sub {
-  my ($meth, $file, $named, @extra) = @_;
-  my @named = map {("--$_", $named->{$_}); } keys %$named;
-  no strict "refs";
-  *{__PACKAGE__ . "::_$meth"}->($file, @named, @extra);
-});
+# lazily spawn worker process
+sub WORKER {
+  $WORKER ||= do {
+    AnyEvent::Worker->new(sub {
+      my ($meth, $file, $named, @extra) = @_;
+      my @named = map {("--$_", $named->{$_}); } keys %$named;
+      no strict "refs";
+      *{__PACKAGE__ . "::_$meth"}->($file, @named, @extra);
+    });
+  };
+}
 
 sub _fetch {
   my $file = shift;
@@ -29,11 +35,11 @@ sub _create {
 
 sub rrd_fetch  {
   my $cb = pop;
-  $WORKER->do(fetch => @_, sub { $cb->($_[1])})
+  WORKER->do(fetch => @_, sub { $cb->($_[1])})
 }
 sub rrd_create {
   my $cb = pop;
-  $WORKER->do(create => @_, sub { $cb->($_[1])})
+  WORKER->do(create => @_, sub { $cb->($_[1])})
 }
 
 1;

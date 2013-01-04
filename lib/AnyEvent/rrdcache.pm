@@ -27,6 +27,12 @@ sub new {
   bless {%args, connect_queue => []}, $class;
 }
 
+sub daemon_addr {
+  my $self = shift;
+  my $host = $self->{host} eq "unix/" ? "unix" : $self->{host};
+  return "$host:$self->{port}";
+}
+
 sub command {
   my $self = shift;
   my $cmd = shift;

@@ -36,4 +36,10 @@ sub error {
   );
 }
 
+sub notfound {
+  $self->{respond}->(
+    [404, ["Content-Type", "text/plain"], ["not found"]]
+  );
+}
+
 1;

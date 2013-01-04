@@ -4,55 +4,52 @@ use v5.14;
 
 use AnyEvent;
 use AnyEvent::Util;
-use AnyEvent::rrdcache;
 use Dragon::Scales::Util;
 use Dragon::Scales::Request;
 
 sub new {
   my ($class, %args) = @_;
-  for (qw{port host dir}) {
+  for (qw{dir cached redis}) {
     die "$_ is required" unless defined $args{$_};
   }
 
-  my $client = AnyEvent::rrdcache->new(
-    host => $args{host},
-    port => $args{port},
-  );
-
-  my $self = bless {
-    client => $client,
-    buffer => {},
-    %args
-  }, $class;
-
-  $self->{t} = AE::timer 0, 60, sub { $self->flush };
-
+  my $self = bless { int => 60, %args }, $class;
+  $self->{t} = AE::timer 0, $self->{int}, sub { $self->flush };
   return $self;
 }
 
 sub flush {
   my $self = shift;
-  my $time = AE::time;
-  my $c = $self->{client};
+  my $r = $self->{redis};
 
   print "flushing to rrdcached\n";
 
-  for my $id (keys %{$self->{buffer}}) {
-    for my $stat (keys %{$self->{buffer}{$id}}) {
-      my $file = "$self->{dir}/$id/$stat.rrd";
-      my $value = $self->{buffer}{$id}{$stat};
-
-      if (!-e $file) {
-        $self->create($id, $stat, sub {
-          $c->update($file, "$time:$value")
-        });
-        next;
-      }
-
-      $c->update($file, "$time:$value", sub {});
+  $r->smembers("flush", sub {
+    my $keys = shift;
+    $r->del("flush", sub {});
+    for my $key (@$keys) {
+      $r->get($key, sub {
+        my $value = shift;
+        $self->update_or_create($key, $value);
+      });
     }
-    delete $self->{buffer}{$id};
+  });
+}
+
+sub update_or_create {
+  my ($self, $key, $value) = @_;
+  my ($id, $stat) = split "-", $key;
+  my $file = "$self->{dir}/$id/$stat.rrd";
+  my $time = AE::time;
+  my $c = $self->{cached};
+
+  if (!-e $file) {
+    return $self->create($id, $stat, sub {
+      $c->update($file, "$time:$value")
+    });
   }
+
+  $c->update($file, "$time:$value");
 }
 
 sub handle_req {
@@ -65,7 +62,7 @@ sub handle_req {
     given ($action) {
       when ("incr") { $self->incr($id, $req) }
       when ("stat") { $self->fetch($id, $req) }
-      default { $req->respond("invalid action") }
+      default { $req->error("invalid action") }
     }
   };
 }
@@ -73,7 +70,12 @@ sub handle_req {
 sub incr {
   my ($self, $id, $req) = @_;
   my @stats = $req->parameters->get_all("stats");
-  $self->{buffer}{$id}{$_}++ for @stats;
+  for my $stat (@stats) {
+    my $key = "$id-$stat";
+    $self->{redis}->incr($key, sub {
+      $self->{redis}->sadd("flush", $key, sub {});
+    });
+  }
   $req->respond("ok");
 }
 
@@ -86,9 +88,9 @@ sub create {
 
   rrd_create $file, {
       start => time,
-      step  => 60,
+      step  => $self->{int},
     },
-    "DS:$stat:GAUGE:120:U:U",
+    "DS:$stat:COUNTER:120:0:10000",
     "RRA:AVERAGE:0.5:1:120", # one minute interval for 2 hours
     "RRA:AVERAGE:0.5:5:576", # five minute interval for two days
     "RRA:AVERAGE:0.5:30:1400", # thirty minute interval for a month
@@ -101,33 +103,21 @@ sub fetch {
   my $stat = $req->parameters->{stat};
   my $file = "$self->{dir}/$id/$stat.rrd";
   my $time = time;
-  my $host = $self->{host} eq "unix/" ? "unix" : $self->{host};
 
   rrd_fetch $file, {
       start => $time - 3600,
       end   => $time,
-      daemon => "$host:$self->{port}",
+      daemon => $self->{cached}->daemon_addr,
     },
     sub {
       my $samples = shift;
-      return $req->error("unable to fetch") unless $samples;
-
-      my $sum = 0;
-
-      # convert undef to 0
       $_->[1] ||= 0 for @$samples;
-
-      # convert rate to total, add to sum
-      for my $i (0 .. @$samples - 1) {
-        $i = @$samples - $i - 1;
-        my $sec = $samples->[$i][0] - $samples->[$i - 1][0];
-        my $min = $sec / 60;
-        $sum += $samples->[$i][1] * $min;
-      }
-
-      $req->respond({
-        samples => $samples,
-        total   => int($sum),
+      $self->{redis}->get("$id-$stat", sub {
+        my $total = shift;
+        $req->respond({
+          samples => ($samples || []),
+          total   => ($total || 0),
+        });
       });
     };
 }
