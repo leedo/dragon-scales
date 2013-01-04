@@ -43,17 +43,17 @@ sub flush {
 
 sub update_or_create {
   my ($self, $id, $stat, $value) = @_;
-  my $file = "$self->{dir}/$id/$stat.rrd";
+  my $file = $self->rrd_path($id, $stat);
   my $time = AE::time;
   my $c = $self->{cached};
 
-  if (!-e $file) {
-    return $self->create($id, $stat, sub {
-      $c->update($file, "$time:$value")
-    });
+  if (-e $file) {
+    return $c->update($file, "$time:$value");
   }
 
-  $c->update($file, "$time:$value");
+  $self->create($id, $stat, sub {
+    $c->update($file, "$time:$value")
+  });
 }
 
 sub handle_req {
@@ -83,10 +83,9 @@ sub incr {
 
 sub create {
   my ($self, $id, $stat, $cb) = @_;
-  my $file = "$self->{dir}/$id/$stat.rrd";
+  my $file = $self->rrd_path($id, $stat, 1);
 
   die "file already exists" if -e $file;
-  mkdir "$self->{dir}/$id" unless -d "$self->{dir}/$id";
 
   rrd_create $file, {
       start => time,
@@ -103,7 +102,7 @@ sub create {
 sub fetch {
   my ($self, $id, $req) = @_;
   my $stat = $req->parameters->{stat};
-  my $file = "$self->{dir}/$id/$stat.rrd";
+  my $file = $self->rrd_path($id, $stat);
   my $time = time;
 
   rrd_fetch $file, {
@@ -131,6 +130,17 @@ sub to_app {
       $self->handle_req($req);
     };
   }
+}
+
+sub rrd_path {
+  my ($self, $id, $stat, $create) = @_;
+  my @dirs = ($self->{dir}, split "", sprintf("%04x", $id));
+
+  if ($create) {
+    mkdir join "/", @dirs[0 .. $_] for 0 .. @dirs - 1;
+  }
+
+  join "/", @dirs, "$stat.rrd";
 }
 
 sub load_totals {
