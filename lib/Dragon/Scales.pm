@@ -134,7 +134,7 @@ sub to_app {
 
 sub rrd_path {
   my ($self, $id, $stat, $create) = @_;
-  my @dirs = ($self->{dir}, split "", sprintf("%04x", $id));
+  my @dirs = ($self->{dir}, split "", sprintf("%04x", $id), $id);
 
   if ($create) {
     mkdir join "/", @dirs[0 .. $_] for 0 .. @dirs - 1;
