@@ -108,7 +108,7 @@ sub fetch {
 
   rrd_fetch $file, {
       start => $time - 3600,
-      end   => $time,
+      end   => $time - 1,
       daemon => $self->{cached}->daemon_addr,
     },
     sub {
