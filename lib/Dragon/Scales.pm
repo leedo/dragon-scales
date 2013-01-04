@@ -4,41 +4,45 @@ use v5.14;
 
 use AnyEvent;
 use AnyEvent::Util;
+use Storable ();
 use Dragon::Scales::Util;
 use Dragon::Scales::Request;
 
 sub new {
   my ($class, %args) = @_;
-  for (qw{dir cached redis}) {
+  for (qw{dir cached}) {
     die "$_ is required" unless defined $args{$_};
   }
 
-  my $self = bless { int => 60, %args }, $class;
-  $self->{t} = AE::timer 0, $self->{int}, sub { $self->flush };
+  my $self = bless {
+    interval => 60,
+    flush => {},
+    %args
+  }, $class;
+
+  $self->load_totals;
+  $self->{t} = AE::timer 0, $self->{interval}, sub { $self->flush };
+
   return $self;
 }
 
 sub flush {
   my $self = shift;
-  my $r = $self->{redis};
-
   print "flushing to rrdcached\n";
 
-  $r->smembers("flush", sub {
-    my $keys = shift;
-    $r->del("flush", sub {});
-    for my $key (@$keys) {
-      $r->get($key, sub {
-        my $value = shift;
-        $self->update_or_create($key, $value);
-      });
+  for my $id (keys %{$self->{flush}}) {
+    for my $stat (keys %{$self->{flush}{$id}}) {
+      my $value = $self->{total}{$id}{$stat};
+      $self->update_or_create($id, $stat, $value);
     }
-  });
+    delete $self->{flush}{$id};
+  }
+
+  $self->store_totals;
 }
 
 sub update_or_create {
-  my ($self, $key, $value) = @_;
-  my ($id, $stat) = split "-", $key;
+  my ($self, $id, $stat, $value) = @_;
   my $file = "$self->{dir}/$id/$stat.rrd";
   my $time = AE::time;
   my $c = $self->{cached};
@@ -71,10 +75,8 @@ sub incr {
   my ($self, $id, $req) = @_;
   my @stats = $req->parameters->get_all("stats");
   for my $stat (@stats) {
-    my $key = "$id-$stat";
-    $self->{redis}->incr($key, sub {
-      $self->{redis}->sadd("flush", $key, sub {});
-    });
+    $self->{total}{$id}{$stat}++;
+    $self->{flush}{$id}{$stat} ||= 1;
   }
   $req->respond("ok");
 }
@@ -88,7 +90,7 @@ sub create {
 
   rrd_create $file, {
       start => time,
-      step  => $self->{int},
+      step  => $self->{interval},
     },
     "DS:$stat:COUNTER:120:0:10000",
     "RRA:AVERAGE:0.5:1:120", # one minute interval for 2 hours
@@ -112,12 +114,10 @@ sub fetch {
     sub {
       my $samples = shift;
       $_->[1] ||= 0 for @$samples;
-      $self->{redis}->get("$id-$stat", sub {
-        my $total = shift;
-        $req->respond({
-          samples => ($samples || []),
-          total   => ($total || 0),
-        });
+
+      $req->respond({
+        samples => ($samples || []),
+        total   => ($self->{total}{$id}{$stat} || 0),
       });
     };
 }
@@ -131,6 +131,26 @@ sub to_app {
       $self->handle_req($req);
     };
   }
+}
+
+sub load_totals {
+  my $self = shift;
+  my $file = "$self->{dir}/totals";
+
+  $self->{total} = -e $file ? Storable::retrieve $file : {};
+}
+
+sub store_totals {
+  my $self = shift;
+  my $file = "$self->{dir}/totals";
+  print "writing totals to $file\n";
+
+  Storable::store $self->{total}, $file;
+}
+
+sub DESTROY {
+  my $self = shift;
+  $self->store_totals;
 }
 
 1;

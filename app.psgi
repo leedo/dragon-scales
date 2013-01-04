@@ -5,7 +5,6 @@ use v5.14;
 use Dragon::Scales;
 use AnyEvent::rrdcache;
 use AnyEvent::rrdcached;
-use AnyEvent::Redis;
 use Plack::Builder;
 use Cwd;
 
@@ -22,15 +21,9 @@ my $rrd = AnyEvent::rrdcache->new(
   port => $server->port,
 );
 
-my $redis = AnyEvent::Redis->new(
-  host => "127.0.0.1",
-  port => 6379,
-);
-
 my $dragon = Dragon::Scales->new(
   dir  => $server->rrd_dir,
   cached => $rrd,
-  redis => $redis,
 );
 
 builder {
