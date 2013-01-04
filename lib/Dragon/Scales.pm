@@ -104,6 +104,7 @@ sub fetch {
   my $stat = $req->parameters->{stat};
   my $file = $self->rrd_path($id, $stat);
   my $time = time;
+  $time = $time - ($time % 60);
 
   rrd_fetch $file, {
       start => $time - 3600,
@@ -134,7 +135,7 @@ sub to_app {
 
 sub rrd_path {
   my ($self, $id, $stat, $create) = @_;
-  my @dirs = ($self->{dir}, split "", sprintf("%04x", $id), $id);
+  my @dirs = ($self->{dir}, split("", sprintf "%04x", $id), $id);
 
   if ($create) {
     mkdir join "/", @dirs[0 .. $_] for 0 .. @dirs - 1;
